@@ -28,7 +28,6 @@
   //ALARMA SE < angulo_minimo
   //ALARMA SE > angulo_maximo
 
-
   //PINAGEM DO HX711 (SENSOR DE CARGA)  
   #define Pin_HX_DT1 35   //DT #1 do HX711
   #define Pin_HX_DT2 34   //DT #2 do HX711
