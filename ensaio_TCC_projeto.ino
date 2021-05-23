@@ -1,0 +1,559 @@
+
+// ======================== Início do sketch =========================
+
+/* Universidade Federal do Rio de Janeiro
+* Departamento de Eletrônica e de Computação
+* Projeto Final de Conclusão de Curso
+* Autora: Leticia Ecard
+*/
+   
+/* SETUP DAS DEFINIÇÕES DO USUÁRIO */
+   
+  unsigned int valor_duty = 100;      //escolha valor para duty-cycle de 0 a 100%
+  unsigned int frequencia_PWM = 8000; //escolha frequência recomendável de 1kHz a 25kHz
+  unsigned int resolucao_PWM = 8;     //escolha resolução de bits de 1 a 16 bits
+
+/* SETUP DAS PINAGENS DO PROGRAMA */
+
+  //INCLUSÃO DAS BIBLIOTECAS
+  #include "HX711.h"       //faz leitura das células de carga no teste_carga
+  #include <driver/adc.h>  //faz leitura do pino no teste_inclinacao
+  #include <esp_adc_cal.h> //faz leitura do pino no teste_inclinacao
+
+  //SETUP CÁLCULO DO valor_escala_celula
+  //valor_escala_celula = (soma dos oito valores escolhidos ÷ 8) ÷ peso real do objeto de calibragem
+  //valor_escala_celula é o número calculado para transformar para kg no inclinômetro
+  double valor_escala_celula=42493.70833333333;
+
+  //SETUP DO PESO MÁXIMO E INCLINAÇÃO MÁXIMA
+  double peso_maximo = 130.0;     //peso_maximo=130kg
+  uint32_t angulo_minimo = 700;  //angulo_minimo= -12graus ~ 600 mV
+  uint32_t angulo_maximo = 2900; //angulo_maximo= +12graus ~ 3000 mV
+  //ALARMA SE < angulo_minimo
+  //ALARMA SE > angulo_maximo
+
+  //PINAGEM DO HX711 (SENSOR DE CARGA)
+  #define Pin_HX_DT1 01   //DT #1 do HX711 
+  #define Pin_HX_DT2 03   //DT #2 do HX711 
+  #define Pin_HX_DT3 05   //DT #3 do HX711
+  #define Pin_HX_DT4 15   //DT #4 do HX711
+
+  #define Pin_HX_SCK1 34    //SCK1 do HX711 
+  #define Pin_HX_SCK2 35    //SCK2 do HX711
+  #define Pin_HX_SCK3 32    //SCK3 do HX711 
+  #define Pin_HX_SCK4 33    //SCK4 do HX711 
+
+  HX711 escalaH1; //relaciona o objeto escala H1
+  HX711 escalaH2; //relaciona o objeto escala H2
+  HX711 escalaH3; //relaciona o objeto escala H3
+  HX711 escalaH4; //relaciona o objeto escala H4
+  
+  //PINAGEM DO INCLINÔMETRO
+  #define Pin_Sensor_Inclinacao_X  36
+  #define Pin_Sensor_Inclinacao_Y  39
+  //preto no GND dos +12V
+  //vermelho no +12V
+
+  //PINAGEM DO SINAL LUMINOSO
+  #define Pin_Luminoso  2
+  
+  //PINAGEM DO DRIVER BTS7960 DOS MOTORES
+  #define Pin_Enable  25  //pwm enable  
+  #define Pin_PWM_L   26  //lpwm         
+  #define Pin_PWM_R   27  //rpwm        
+  
+  //PINAGEM DOS CMOS
+  #define Pin_CMOS_Carga        13
+  #define Pin_CMOS_Inclinacao   12
+  #define Pin_CMOS_Curso_Baixo  14
+
+  //PINAGEM DO BOTÃO TOGGLE
+  #define Pin_Botao_Toggle 04 
+
+  //PINAGEM DA BOTOEIRA M1 ELEVAÇÃO
+  #define Pin_Botao_Emergencia  21
+  #define Pin_Botao_Subir       19
+  #define Pin_Botao_Descer      18
+
+  //PINAGEM DA BOTOEIRA M2 DESLOCAMENTO
+  #define Pin_Botao_Re      17 
+  #define Pin_Botao_Frente  16 
+
+  //PINAGEM DOS SENSORES DE FIM DE CURSO
+  #define Pin_Fim_Curso_Alto  23
+  #define Pin_Fim_Curso_Baixo 22
+
+/* SETUP DAS THREADS DO PROGRAMA */
+
+  //ATRIBUINDO VARIÁVEL PARA KILL PROCESSO
+  TaskHandle_t taskElevacao     = NULL; //armazena ID da thread para dar kill nela
+  TaskHandle_t taskEmergencia   = NULL; //armazena ID da thread para dar kill nela
+  TaskHandle_t taskDeslocamento = NULL; //armazena ID da thread para dar kill nela
+
+/* SETUP DOS CANAIS DO PROGRAMA E VARIÁVEIS DE DUTY-CYCLE */
+
+  //ATRIBUINDO NOME AO CANAL 0 E AO CANAL 1 PARA USAR NO CÓDIGO
+  unsigned int canal_PWM_R = 1;  //Pin_PWM_R ao canal 0 
+  unsigned int canal_PWM_L = 0;  //Pin_PWM_L ao canal 1
+
+  //ATRIBUINDO AS VARIÁVEIS DE DUTY-CYCLE
+  unsigned int duty_left = 0;             //setup inicial 
+  unsigned int duty_right = 0;            //setup inicial 
+  unsigned int duty_right_emergencia = 0; //setup inicial 
+
+/* MAPEANDO VALOR_DUTY PARA VALOR_DUTY_MAPEADO */
+     
+  unsigned int valor_duty_zero = 0;
+  unsigned int valor_duty_mapeado = map(valor_duty, 0,100, 0,255);
+               //0-255                  //0-100%
+
+/* setup() */
+   
+void setup()
+{
+  Serial.begin(115200);
+
+  //ENTRADAS DO HX711 (SENSOR DE CARGA)
+  pinMode(Pin_HX_SCK1, OUTPUT);  //SCK1 do HX711 
+  pinMode(Pin_HX_SCK2, OUTPUT);  //SCK2 do HX711 
+  pinMode(Pin_HX_SCK3, OUTPUT);  //SCK3 do HX711 
+  pinMode(Pin_HX_SCK4, OUTPUT);  //SCK4 do HX711 
+
+  pinMode(Pin_HX_DT1, INPUT);   //DT #1 do HX711
+  pinMode(Pin_HX_DT2, INPUT);   //DT #2 do HX711
+  pinMode(Pin_HX_DT3, INPUT);   //DT #3 do HX711
+  pinMode(Pin_HX_DT4, INPUT);   //DT #4 do HX711
+  
+  escalaH1.begin (Pin_HX_DT1, Pin_HX_SCK1);
+  escalaH2.begin (Pin_HX_DT2, Pin_HX_SCK2);
+  escalaH3.begin (Pin_HX_DT3, Pin_HX_SCK3);
+  escalaH4.begin (Pin_HX_DT4, Pin_HX_SCK4); 
+
+  Serial.println("Setando escala e tara de H1..."); 
+  escalaH1.set_scale(valor_escala_celula);
+  escalaH1.tare();       
+  Serial.println("Setando escala e tara de H2..."); 
+  escalaH2.set_scale(valor_escala_celula); 
+  escalaH2.tare();            
+  Serial.println("Setando escala e tara de H3..."); 
+  escalaH3.set_scale(valor_escala_celula);  
+  escalaH3.tare();           
+  Serial.println("Setando escala e tara de H4..."); 
+  escalaH4.set_scale(valor_escala_celula);  
+  escalaH4.tare();  
+
+  //ENTRADAS DO INCLINÔMETRO
+  pinMode(Pin_Sensor_Inclinacao_X, INPUT);
+  pinMode(Pin_Sensor_Inclinacao_Y, INPUT);
+
+  //SAÍDA DO SINAL LUMINOSO
+  pinMode(Pin_Luminoso, OUTPUT);
+
+  //SAÍDAS DO DRIVER DOS MOTORES
+  pinMode(Pin_Enable, OUTPUT);
+  pinMode(Pin_PWM_L, OUTPUT);
+  pinMode(Pin_PWM_R, OUTPUT);
+
+  //SAÍDAS DOS CMOS
+  pinMode(Pin_CMOS_Carga, OUTPUT);
+  pinMode(Pin_CMOS_Inclinacao, OUTPUT);
+  pinMode(Pin_CMOS_Curso_Baixo, OUTPUT);  
+
+  //ENTRADA DO BOTÃO TOGGLE
+  pinMode(Pin_Botao_Toggle, INPUT);
+  
+  //ENTRADAS DA BOTOEIRA M1 ELEVAÇÃO
+  pinMode(Pin_Botao_Emergencia, INPUT);
+  pinMode(Pin_Botao_Subir, INPUT);
+  pinMode(Pin_Botao_Descer, INPUT);
+
+  //ENTRADAS DA BOTOEIRA M2 DESLOCAMENTO
+  pinMode(Pin_Botao_Re, INPUT);
+  pinMode(Pin_Botao_Frente, INPUT);
+
+  //ENTRADAS DOS SENSORES DE FIM DE CURSO
+  pinMode(Pin_Fim_Curso_Alto, INPUT); 
+  pinMode(Pin_Fim_Curso_Baixo, INPUT);   
+  
+  //CONTROLE DE POTÊNCIA VIA PWM
+  //ATRIBUINDO FREQUÊNCIA E RESOLUÇÃO DE BITS DO PWM
+  ledcAttachPin(Pin_PWM_R, canal_PWM_R); //atribuímos o pino Pin_PWM_R ao canal 0
+  ledcSetup(canal_PWM_R, frequencia_PWM, resolucao_PWM); 
+  //setamos o canal canal_PWM_R com a frequência "frequencia_PWM" e com resolução "resolucao_PWM"
+
+  ledcAttachPin(Pin_PWM_L, canal_PWM_L); //atribuímos o pino Pin_PWM_L ao canal 1
+  ledcSetup(canal_PWM_L, frequencia_PWM, resolucao_PWM);   
+  //setamos o canal canal_PWM_L com a frequência "frequencia_PWM" e com resolução "resolucao_PWM"
+
+  executar(); //chamo função executar()
+}
+
+/* loop() */
+
+void loop()
+{
+  delay(100); //função loop ativa para watchdog não reiniciar
+}
+
+/* espera_ocupada() */
+
+void espera_ocupada(byte wait){
+  while(digitalRead(Pin_Botao_Toggle) == wait)
+  {
+    delay(500); //estado de espera ocupada
+    
+    Serial.print("Espera Ocupada: ");
+    Serial.print(wait);
+    Serial.print(" | HIGH=Serviço | LOW=Condução");
+  }
+}
+
+/* executar() */
+
+void executar()
+{
+  while(true)
+  {
+    if (digitalRead(Pin_Botao_Toggle) == HIGH)       //SE Pin_Botao_Toggle HIGH ENTÃO SERVIÇO
+    {
+      digitalWrite(Pin_CMOS_Curso_Baixo, LOW); //desliga Pin_CMOS_Curso_Baixo
+      Serial.println("ENTREI NO TOGGLE SERVICO");
+      xTaskCreatePinnedToCore(thread_elevacao,   "thread_elevacao",   8192, NULL, 1, &taskElevacao,   1); //cria thread no Core0 
+      xTaskCreatePinnedToCore(thread_emergencia, "thread_emergencia", 8192, NULL, 1, &taskEmergencia, 1); //cria thread no Core1  
+      espera_ocupada(HIGH);
+      vTaskDelete(taskElevacao);   //deleta thread
+      vTaskDelete(taskEmergencia); //deleta thread
+    }
+    
+    else if (digitalRead(Pin_Botao_Toggle) == LOW) //SE Pin_Botao_Toggle LOW ENTÃO CONDUÇÃO
+    {
+      digitalWrite(Pin_CMOS_Carga, LOW);      //desliga Pin_CMOS_Carga
+      digitalWrite(Pin_CMOS_Inclinacao, LOW); //desliga Pin_CMOS_Inclinacao
+      Serial.println("ENTREI NO TOGGLE CONDUCAO");
+      xTaskCreatePinnedToCore(thread_deslocamento, "thread_deslocamento", 8192, NULL, 1, &taskDeslocamento, 1); //cria thread no Core0
+      espera_ocupada(LOW);
+      vTaskDelete(taskDeslocamento); //deleta thread
+    }
+  }
+}
+
+/* thread_emergencia() */
+
+//função que comanda botão de emergência | toggle serviço
+void thread_emergencia(void *parametros)
+{   
+  while (digitalRead(Pin_Botao_Toggle) == HIGH) //se Modo Serviço
+  {
+     if (digitalRead(Pin_Botao_Emergencia) == LOW) //botão emergência acionado é LOW
+     { 
+        vTaskDelete(taskElevacao); //deleta thread
+        
+        Serial.println("ENTREI NA thread_emergencia");
+        
+        digitalWrite(Pin_Enable, HIGH);
+  
+        //SEQUÊNCIA DE ACIONAMENTO DO BOTAO_EMERGÊNCIA (DESCER = MOTOR P/ DIREITA) 
+        while (digitalRead(Pin_Fim_Curso_Baixo) != HIGH) //ENQUANTO não cheguei ao fim de curso baixo
+        {
+          if (duty_right_emergencia < valor_duty_mapeado)
+          {
+            duty_right_emergencia++;              
+          }
+          ledcWrite(canal_PWM_R, duty_right_emergencia);
+          Serial.println(duty_right_emergencia);
+          delay(50);
+        }
+        motor_right_stop(duty_right_emergencia);
+    }
+  }
+}
+
+/* thread_elevacao() */
+
+//função que comanda motor M1 de elevação | toggle serviço
+void thread_elevacao(void *parametros) //parametros não é usado
+{ 
+  while (digitalRead(Pin_Botao_Toggle) == HIGH) //se Modo Serviço
+  {
+    while (digitalRead(Pin_Botao_Emergencia) == HIGH) //botão emergência não-acionado é HIGH
+    {
+      if (digitalRead(Pin_Fim_Curso_Baixo) == HIGH) //SE plataforma estacionada
+      { 
+        teste_carga();      //testa carga e aciona Pin_CMOS_Carga
+        teste_inclinacao(); //testa inclinação e aciona Pin_CMOS_Inclinacao
+      }
+    
+      //SEQUÊNCIA DE ACIONAMENTO DO BOTAO_SUBIR (MOTOR P/ ESQUERDA) E DO BOTAO_DESCER (MOTOR P/ DIREITA)  
+      if ((digitalRead(Pin_Botao_Subir) == HIGH) && (digitalRead(Pin_Fim_Curso_Alto) == LOW)) //SE Botao_Subir E Curso_Alto LOW
+      {  
+        motor_left(); //roda motor para esquerda
+      }
+    
+      else if ((digitalRead(Pin_Botao_Descer) == HIGH) && (digitalRead(Pin_Fim_Curso_Baixo) == LOW)) //SE Botao_Descer e Curso_Baixo LOW
+      {    
+        motor_right(); //roda motor para direita
+      }
+      
+      else //se nenhum botão foi apertado
+      {                     
+        motor_stop_abrupt();  //parar o motor
+      } 
+    }
+  }
+}
+
+/* thread_deslocamento() */
+
+//função que comanda motor M2 de deslocamento | toggle condução
+void thread_deslocamento(void *parametros) 
+{
+  while (digitalRead(Pin_Botao_Toggle) == LOW) //se Modo Condução
+  {
+    teste_curso_baixo(); //testa curso baixo e aciona Pin_CMOS_Curso_Baixo
+  
+    //SEQUÊNCIA DE ACIONAMENTO DO BOTAO_RE (MOTOR P/ ESQUERDA) E DO BOTAO_FRENTE (MOTOR P/ DIREITA)
+    if (digitalRead(Pin_Botao_Re) == HIGH) //SE Botao_Re
+    {  
+      motor_left(); //roda motor para esquerda
+    }
+  
+    else if (digitalRead(Pin_Botao_Frente) == HIGH) //SE Botao_Frente
+    {    
+      motor_right(); //roda motor para direita
+    }
+    
+    else //se nenhum botão foi apertado
+    {                     
+      motor_stop_abrupt();  //parar o motor
+    }
+  }
+}
+
+/* motor_left() */
+
+//função para rodar motor para esquerda | modo rampa
+void motor_left()
+{
+  digitalWrite(Pin_Enable, HIGH);
+  
+  while ( (digitalRead(Pin_Botao_Subir) == HIGH && digitalRead(Pin_Fim_Curso_Alto) != HIGH) || (digitalRead(Pin_Botao_Re) == HIGH) )
+  {
+    if (duty_left < valor_duty_mapeado)
+    {
+      duty_left++;
+    }
+    ledcWrite(canal_PWM_L, duty_left);  //escreve duty no canal_PWM_L
+    Serial.println(duty_left);
+    delay(50);
+  }
+  motor_left_stop(duty_left);  //modo parar-rampa
+}
+
+/* motor_left_stop() */
+
+//função para parar motor da esquerda | modo parar-rampa
+void motor_left_stop(unsigned int &valor_duty_atual)
+{  
+  //reduzir duty-cycle de valor_duty_atual até valor_duty_zero
+  for ( ; valor_duty_atual>valor_duty_zero ; valor_duty_atual--) //variação do duty de 100-0%
+  {
+    if ( (digitalRead(Pin_Botao_Subir) == HIGH && digitalRead(Pin_Fim_Curso_Alto) != HIGH) || (digitalRead(Pin_Botao_Re) == HIGH) )
+    {
+      break;
+    }
+    ledcWrite(canal_PWM_L, valor_duty_atual); //escreve duty no canal_PWM_L
+    Serial.println(valor_duty_atual);
+    delay(50);
+  }
+}
+
+/* motor_right() */
+
+//função para rodar motor para direita | modo rampa
+void motor_right()
+{
+  digitalWrite(Pin_Enable, HIGH);
+  
+  while ( (digitalRead(Pin_Botao_Descer) == HIGH && digitalRead(Pin_Fim_Curso_Baixo) != HIGH) || (digitalRead(Pin_Botao_Frente) == HIGH) )
+  {
+    if (duty_right < valor_duty_mapeado)
+    {
+      duty_right++;
+    }
+    ledcWrite(canal_PWM_R, duty_right);  //escreve duty no canal_PWM_L
+    Serial.println(duty_right);
+    delay(50);
+  }
+  motor_right_stop(duty_right);  //modo parar-rampa
+}
+
+/* motor_right_stop() */
+
+//função para parar motor da direita | modo parar-rampa
+void motor_right_stop(unsigned int &valor_duty_atual)
+{  
+  //reduzir duty-cycle de valor_duty_atual até valor_duty_zero
+  for ( ; valor_duty_atual>valor_duty_zero ; valor_duty_atual--) //variação do duty de 100-0%
+  {
+    if ( (digitalRead(Pin_Botao_Descer) == HIGH && digitalRead(Pin_Fim_Curso_Baixo) != HIGH) || (digitalRead(Pin_Botao_Frente) == HIGH) )
+    {
+      break;
+    }
+    ledcWrite(canal_PWM_R, valor_duty_atual); //escreve duty no canal_PWM_R
+    Serial.println(valor_duty_atual);
+    delay(50);
+  }
+}
+
+/* motor_stop_abrupt() */
+
+//função para parar motor | modo brusco
+void motor_stop_abrupt()
+{
+  digitalWrite(Pin_Enable, HIGH);
+ 
+  ledcWrite(canal_PWM_L, valor_duty_zero);  
+  //ledcWrite(canal, duty)
+  ledcWrite(canal_PWM_R, valor_duty_zero);  
+  //ledcWrite(canal, duty)
+}
+
+/* teste_carga() */
+
+void teste_carga()
+{
+  double total_peso;
+  
+  delay(1500);
+  Serial.println("Reading... ");
+  if (escalaH1.is_ready() and escalaH2.is_ready() and escalaH3.is_ready() and escalaH4.is_ready())
+    {
+      double peso1 = escalaH1.get_units();
+      double peso2 = escalaH2.get_units();
+      double peso3 = escalaH3.get_units();
+      double peso4 = escalaH4.get_units();
+     
+      escalaH1.power_down(); //put the ADC in sleep mode
+      escalaH2.power_down(); //put the ADC in sleep mode
+      escalaH3.power_down();  //put the ADC in sleep mode
+      escalaH4.power_down(); //put the ADC in sleep mode
+   
+      delay(500);
+      escalaH1.power_up();
+      escalaH2.power_up();
+      escalaH3.power_up();
+      escalaH4.power_up();
+      
+      total_peso = peso1 + peso2 + peso3 + peso4; 
+      Serial.print(total_peso,2);
+      Serial.println(" kg");
+    }
+  else 
+  {
+    if(!escalaH1.is_ready())
+    {
+      Serial.println("escalaH1 not found.");
+    }
+    if(!escalaH2.is_ready())
+    {
+      Serial.println("escalaH2 not found.");
+    }
+    if(!escalaH3.is_ready())
+    {
+      Serial.println("escalaH3 not found.");
+    }
+    if(!escalaH4.is_ready())
+    {
+      Serial.println("escalaH4 not found.");
+    }
+  }
+
+  if ( (total_peso) > peso_maximo) //SE total_peso for MAIOR que peso_maximo
+  {
+    digitalWrite(Pin_CMOS_Carga, LOW); //ENTÃO Pin_CMOS_Carga DESLIGA
+    digitalWrite(Pin_Luminoso, HIGH); //ENTÃO Pin_Luminoso LIGA
+    Serial.println("ALERTA PESO!");
+  }
+  else                               //SENÃO
+  {
+    digitalWrite(Pin_CMOS_Carga, HIGH); //ENTÃO Pin_CMOS_Carga LIGA
+    digitalWrite(Pin_Luminoso, LOW);    //ENTÃO Pin_Luminoso DESLIGA
+  } 
+}
+
+/* teste_inclinacao() */
+
+//analogRead não funciona corretamente para ler a voltagem do pino, sendo necessário calibração e atenuação da leitura
+esp_adc_cal_characteristics_t adc_cal; //estrutura que contém as informações para calibração
+
+void teste_inclinacao()
+{
+  adc1_config_width(ADC_WIDTH_BIT_12); //configura a resolução
+
+  adc1_config_channel_atten(ADC1_CHANNEL_0, ADC_ATTEN_DB_11); //configura a atenuação do eixo X
+  adc1_config_channel_atten(ADC1_CHANNEL_3, ADC_ATTEN_DB_11); //configura a atenuação do eixo Y
+
+  esp_adc_cal_value_t adc_type = esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_11, ADC_WIDTH_BIT_12, 1100, &adc_cal); //inicializa a estrutura de calibração  
+
+  //Obtém a leitura RAW do ADC para depois ser utilizada pela API de calibração
+  //Média simples de 10 leituras intervaladas com 30us
+
+  uint32_t voltageX = 0;
+  uint32_t voltageY = 0;
+
+  delay(500); //delay de 1 segundo
+        
+  for (int i = 0; i < 10; i++)
+  {
+    voltageX += adc1_get_raw(ADC1_CHANNEL_0); //obtém o valor RAW do ADC do eixo X
+    delay(30);
+  }
+  voltageX /= 10;
+  voltageX = esp_adc_cal_raw_to_voltage(voltageX, &adc_cal); //converte e calibra o valor lido (RAW) para mV
+  Serial.print("Voltage X: ");
+  Serial.print(voltageX); //printa a leitura calibrada do eixo X
+  Serial.println(" mV");
+
+  for (int i = 0; i < 10; i++)
+  {
+    voltageY += adc1_get_raw(ADC1_CHANNEL_3); //obtém o valor RAW do ADC do eixo Y
+    delay(30);
+  }
+  voltageY /= 10;
+  voltageY = esp_adc_cal_raw_to_voltage(voltageY, &adc_cal); //converte e calibra o valor lido (RAW) para mV
+  Serial.print("Voltage Y: ");
+  Serial.print(voltageY); //printa a leitura calibrada do eixo Y
+  Serial.println(" mV");
+
+  if  ( ( voltageX<angulo_minimo ) || ( voltageX>angulo_maximo ) || 
+        ( voltageY<angulo_minimo ) || ( voltageY>angulo_maximo ) )       
+  { 
+    digitalWrite(Pin_CMOS_Inclinacao, LOW); //FORA FAIXA ENTÃO Pin_CMOS_Inclinacao DESLIGA    
+    digitalWrite(Pin_Luminoso, HIGH);  //FORA FAIXA ENTÃO Pin_Luminoso LIGA
+    Serial.println("ALERTA INCLINAÇÃO!");
+  }
+  else                                       
+  {
+    digitalWrite(Pin_CMOS_Inclinacao, HIGH);  //DENTRO FAIXA ENTÃO Pin_CMOS_Inclinacao LIGA    
+    digitalWrite(Pin_Luminoso, LOW); //DENTRO FAIXA ENTÃO Pin_Luminoso DESLIGA
+  } 
+
+}
+
+/* teste_curso_baixo() */
+
+void teste_curso_baixo()
+{
+  if (digitalRead(Pin_Fim_Curso_Baixo) == HIGH) //SE curso baixo HIGH (está escionado)
+  {
+    digitalWrite(Pin_CMOS_Curso_Baixo, HIGH);    //ENTÃO Pin_CMOS_Curso_Baixo liga
+  }
+  else                                          //SE curso baixo LOW 
+  {
+    digitalWrite(Pin_CMOS_Curso_Baixo, LOW);     //ENTÃO Pin_CMOS_Curso_Baixo desliga
+  }
+}
+
+
+
+// ======================== Fim do sketch =========================
