@@ -537,7 +537,6 @@ void teste_inclinacao()
     digitalWrite(Pin_CMOS_Inclinacao, HIGH);  //DENTRO FAIXA ENTÃO Pin_CMOS_Inclinacao LIGA    
     digitalWrite(Pin_Luminoso, LOW); //DENTRO FAIXA ENTÃO Pin_Luminoso DESLIGA
   } 
-
 }
 
 /* teste_curso_baixo() */
@@ -553,7 +552,6 @@ void teste_curso_baixo()
     digitalWrite(Pin_CMOS_Curso_Baixo, LOW);     //ENTÃO Pin_CMOS_Curso_Baixo desliga
   }
 }
-
 
 
 // ======================== Fim do sketch =========================
